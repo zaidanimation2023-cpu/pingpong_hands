@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>بنج بونك - تحكم بالحركة</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#0a0a1a;font-family:Arial,sans-serif;overflow:hidden;display:flex;align-items:center;justify-content:center;height:100vh;color:#fff}
+  #container{position:relative;width:800px;height:500px;border-radius:16px;overflow:hidden;box-shadow:0 0 60px rgba(0,200,255,.3)}
+  #videoEl{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.22;transform:scaleX(-1)}
+  #gameCanvas{position:absolute;inset:0;width:100%;height:100%}
+  #ui{position:absolute;top:0;left:0;width:100%;padding:12px 28px;display:flex;justify-content:space-between;align-items:center;z-index:10;pointer-events:none}
+  .score{font-size:54px;font-weight:bold;text-shadow:0 0 20px currentColor}
+  .score.left{color:#00e5ff}.score.right{color:#ff4081}
+  .divider{font-size:26px;color:rgba(255,255,255,.25)}
+  #status{position:absolute;bottom:10px;left:50%;transform:translateX(-50%);font-size:12px;color:rgba(255,255,255,.55);z-index:10;white-space:nowrap;background:rgba(0,0,0,.45);padding:4px 14px;border-radius:20px}
+  #overlay,#winOverlay{position:absolute;inset:0;background:rgba(0,0,0,.88);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:20;border-radius:16px}
+  #winOverlay{display:none}
+  h1{font-size:38px;margin-bottom:8px;background:linear-gradient(90deg,#00e5ff,#ff4081);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+  p.info{font-size:13.5px;color:rgba(255,255,255,.65);margin-bottom:22px;text-align:center;line-height:2.1}
+  .btn{border:none;color:#fff;padding:13px 36px;font-size:16px;border-radius:50px;cursor:pointer;transition:transform .2s}
+  #startBtn{background:linear-gradient(135deg,#00e5ff,#7c4dff)}.btn:hover{transform:scale(1.06)}
+  #restartBtn{background:linear-gradient(135deg,#ff4081,#7c4dff);margin-top:14px}
+  #winText{font-size:44px;font-weight:bold;margin-bottom:10px}
+  #camStatus{margin-top:12px;font-size:12px;color:rgba(255,255,255,.4)}
+  /* motion preview bars */
+  #motionBars{position:absolute;top:8px;left:50%;transform:translateX(-50%);display:flex;gap:6px;z-index:15;pointer-events:none}
+  .mbar{width:14px;height:14px;border-radius:50%;opacity:.85;transition:background .15s}
+</style>
+</head>
+<body>
+<div id="container">
+  <video id="videoEl" autoplay playsinline muted></video>
+  <canvas id="gameCanvas"></canvas>
+
+  <div id="ui">
+    <span class="score left" id="scoreL">0</span>
+    <span class="divider">—</span>
+    <span class="score right" id="scoreR">0</span>
+  </div>
+
+  <div id="status">جاري تشغيل الكاميرا...</div>
+
+  <!-- Splash Screen -->
+  <div id="splash" style="position:absolute;inset:0;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:30;border-radius:16px;transition:opacity .8s ease">
+    <div id="splashName" style="font-size:48px;font-weight:900;letter-spacing:6px;color:#1a6fd4;opacity:0;transition:opacity 1s ease;font-family:Arial Black,sans-serif;text-shadow:0 0 30px #1a6fd4,0 0 60px #1a6fd455">ZAID STUDIO</div>
+    <div id="splashBar" style="margin-top:24px;width:220px;height:3px;background:rgba(255,255,255,.08);border-radius:4px;overflow:hidden">
+      <div id="splashFill" style="height:100%;width:0%;background:linear-gradient(90deg,#00e5ff,#1a6fd4);border-radius:4px;transition:width 5s linear"></div>
+    </div>
+  </div>
+
+  <div id="overlay">
+    <h1>🏓 بنج بونك</h1>
+    <p class="info">
+      🔵 حرّك <strong style="color:#00e5ff">يدك اليمنى</strong> على الجانب الأيسر من الكاميرا<br>
+      🔴 حرّك <strong style="color:#ff4081">يدك اليسرى</strong> على الجانب الأيمن من الكاميرا<br>
+      <span style="color:rgba(255,255,255,.38);font-size:11.5px">يعمل بكشف الحركة — يعمل مع أي لون بشرة وأي إضاءة</span>
+    </p>
+    <button class="btn" id="startBtn">ابدأ اللعبة 🎮</button>
+    <div id="camStatus">⏳ انتظر تشغيل الكاميرا...</div>
+  </div>
+
+  <div id="winOverlay">
+    <div id="winText"></div>
+    <div style="color:rgba(255,255,255,.45);font-size:14px;margin-bottom:4px">أحسنت!</div>
+    <button class="btn" id="restartBtn">🔄 العب مرة أخرى</button>
+  </div>
+</div>
+
+<script>
+// ── constants ─────────────────────────────────────────────────────
+const W=800,H=500,PW=12,PH=90,BR=9,WIN=7;
+const INIT_VX=3.2, MAX_SPD=7.5;
+const VW=160,VH=100; // motion canvas resolution
+
+// ── elements ──────────────────────────────────────────────────────
+const canvas=document.getElementById('gameCanvas');
+const ctx=canvas.getContext('2d');
+canvas.width=W; canvas.height=H;
+const video=document.getElementById('videoEl');
+const statusEl=document.getElementById('status');
+const camStatusEl=document.getElementById('camStatus');
+const scoreLE=document.getElementById('scoreL');
+const scoreRE=document.getElementById('scoreR');
+const overlay=document.getElementById('overlay');
+const winOverlay=document.getElementById('winOverlay');
+const winText=document.getElementById('winText');
+
+// ── motion detection canvas ───────────────────────────────────────
+const mc=document.createElement('canvas');
+mc.width=VW; mc.height=VH;
+const mctx=mc.getContext('2d',{willReadFrequently:true});
+let prevFrame=null;
+
+// ── hand state ────────────────────────────────────────────────────
+let handY={L:H/2,R:H/2};
+let handFound={L:false,R:false};
+let camReady=false;
+
+const MOTION_THRESH=25;  // pixel diff threshold
+const MIN_PIXELS=60;     // min moving pixels to count as hand
+
+function detectMotion(){
+  if(!camReady||video.readyState<2) return;
+  mctx.save();
+  mctx.scale(-1,1); // mirror to match screen
+  mctx.drawImage(video,-VW,0,VW,VH);
+  mctx.restore();
+
+  const cur=mctx.getImageData(0,0,VW,VH).data;
+  if(!prevFrame){prevFrame=cur.slice(); return;}
+
+  // left half of screen = left portion of mirrored video
+  let lSumY=0,lCnt=0, rSumY=0,rCnt=0;
+  for(let y=0;y<VH;y++){
+    for(let x=0;x<VW;x++){
+      const i=(y*VW+x)*4;
+      const diff=Math.abs(cur[i]-prevFrame[i])+
+                 Math.abs(cur[i+1]-prevFrame[i+1])+
+                 Math.abs(cur[i+2]-prevFrame[i+2]);
+      if(diff>MOTION_THRESH){
+        if(x<VW/2){lSumY+=y;lCnt++;}
+        else       {rSumY+=y;rCnt++;}
+      }
+    }
+  }
+  prevFrame=cur.slice();
+
+  handFound.L=lCnt>MIN_PIXELS;
+  handFound.R=rCnt>MIN_PIXELS;
+  if(handFound.L) handY.L=clamp((lSumY/lCnt)/VH*H,0,H);
+  if(handFound.R) handY.R=clamp((rSumY/rCnt)/VH*H,0,H);
+}
+
+// ── game state ────────────────────────────────────────────────────
+let running=false,rafId=null;
+let scoreL=0,scoreR=0;
+let pL=H/2,pR=H/2,tL=H/2,tR=H/2;
+let bx=W/2,by=H/2,vx=INIT_VX,vy=2;
+let particles=[],trail=[];
+let flashTimer=0,flashColor='rgba(0,0,0,0)';
+
+function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+
+function spawnP(x,y,col){
+  for(let i=0;i<14;i++){
+    const a=Math.random()*Math.PI*2,s=1.5+Math.random()*3;
+    particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:1,col});
+  }
+}
+
+function resetBall(dir){
+  bx=W/2;by=H/2;trail=[];
+  const d=dir||(Math.random()>.5?1:-1);
+  vx=d*INIT_VX; vy=(Math.random()-.5)*1.8;
+}
+
+// ── draw ──────────────────────────────────────────────────────────
+function drawPaddle(x,y,col){
+  const g=ctx.createLinearGradient(x,y-PH/2,x+PW,y+PH/2);
+  g.addColorStop(0,col+'ee');g.addColorStop(1,col+'33');
+  ctx.fillStyle=g;ctx.shadowColor=col;ctx.shadowBlur=22;
+  ctx.beginPath();ctx.roundRect(x,y-PH/2,PW,PH,6);ctx.fill();
+  ctx.shadowBlur=0;
+}
+
+function drawHandDot(x,found,col,label){
+  // glow circle
+  ctx.beginPath();ctx.arc(x,H-22,found?9:6,0,Math.PI*2);
+  ctx.fillStyle=found?col:'rgba(255,255,255,.12)';
+  ctx.shadowColor=found?col:'transparent';ctx.shadowBlur=found?18:0;
+  ctx.fill();ctx.shadowBlur=0;
+  // label
+  ctx.fillStyle='rgba(255,255,255,.28)';ctx.font='10px Arial';ctx.textAlign='center';
+  ctx.fillText(label,x,H-6);
+}
+
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='rgba(8,8,28,.72)';ctx.fillRect(0,0,W,H);
+
+  // center dashes
+  ctx.setLineDash([12,10]);ctx.strokeStyle='rgba(255,255,255,.1)';ctx.lineWidth=2;
+  ctx.beginPath();ctx.moveTo(W/2,0);ctx.lineTo(W/2,H);ctx.stroke();
+  ctx.setLineDash([]);
+
+  // flash
+  if(flashTimer>0){
+    ctx.globalAlpha=flashTimer/24*.3;ctx.fillStyle=flashColor;
+    ctx.fillRect(0,0,W,H);ctx.globalAlpha=1;flashTimer--;
+  }
+
+  drawPaddle(18,pL,'#00e5ff');
+  drawPaddle(W-18-PW,pR,'#ff4081');
+
+  // trail
+  trail.forEach((p,i)=>{
+    const r=Math.max(0,BR*(i/trail.length)*.85);
+    ctx.globalAlpha=(i/trail.length)*.38;
+    ctx.fillStyle='#fff';
+    ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fill();
+  });
+  ctx.globalAlpha=1;
+
+  // ball
+  ctx.shadowColor='#fff';ctx.shadowBlur=26;ctx.fillStyle='#fff';
+  ctx.beginPath();ctx.arc(bx,by,BR,0,Math.PI*2);ctx.fill();
+  ctx.shadowBlur=0;
+
+  // particles
+  particles.forEach(p=>{
+    ctx.globalAlpha=p.life;ctx.fillStyle=p.col;
+    ctx.beginPath();ctx.arc(p.x,p.y,Math.max(0,4*p.life),0,Math.PI*2);ctx.fill();
+  });
+  ctx.globalAlpha=1;
+
+  // hand indicators
+  drawHandDot(36,handFound.L,'#00e5ff','← يمينك');
+  drawHandDot(W-36,handFound.R,'#ff4081','يسارك →');
+}
+
+// ── game loop ─────────────────────────────────────────────────────
+function loop(){
+  if(!running)return;
+
+  detectMotion();
+  if(handFound.L)tL=handY.L;
+  if(handFound.R)tR=handY.R;
+
+  pL+=(tL-pL)*.14; pR+=(tR-pR)*.14;
+  pL=clamp(pL,PH/2,H-PH/2); pR=clamp(pR,PH/2,H-PH/2);
+
+  bx+=vx;by+=vy;
+  trail.push({x:bx,y:by});
+  if(trail.length>12)trail.shift();
+
+  particles=particles.filter(p=>p.life>0);
+  particles.forEach(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=.1;p.life-=.028;});
+
+  // walls
+  if(by-BR<=0){by=BR;vy=Math.abs(vy);spawnP(bx,by,'#8888ff');}
+  if(by+BR>=H){by=H-BR;vy=-Math.abs(vy);spawnP(bx,by,'#8888ff');}
+
+  // left paddle
+  const lx=18+PW;
+  if(vx<0&&bx-BR<=lx&&bx>10&&by>=pL-PH/2-BR&&by<=pL+PH/2+BR){
+    bx=lx+BR;vx=Math.abs(vx)*1.04;
+    vy=(by-pL)/(PH/2)*4;spawnP(bx,by,'#00e5ff');
+  }
+  // right paddle
+  const rx=W-18-PW;
+  if(vx>0&&bx+BR>=rx&&bx<W-10&&by>=pR-PH/2-BR&&by<=pR+PH/2+BR){
+    bx=rx-BR;vx=-Math.abs(vx)*1.04;
+    vy=(by-pR)/(PH/2)*4;spawnP(bx,by,'#ff4081');
+  }
+
+  // speed cap
+  const spd=Math.hypot(vx,vy);
+  if(spd>MAX_SPD){vx=vx/spd*MAX_SPD;vy=vy/spd*MAX_SPD;}
+
+  // score
+  if(bx+BR<0){scoreR++;scoreRE.textContent=scoreR;flashColor='#ff4081';flashTimer=24;if(!checkWin())resetBall(1);}
+  if(bx-BR>W){scoreL++;scoreLE.textContent=scoreL;flashColor='#00e5ff';flashTimer=24;if(!checkWin())resetBall(-1);}
+
+  draw();
+  rafId=requestAnimationFrame(loop);
+}
+
+function checkWin(){
+  if(scoreL>=WIN||scoreR>=WIN){
+    running=false;
+    winText.textContent=scoreL>=WIN?'🏆 اللاعب الأيسر فاز!':'🏆 اللاعب الأيمن فاز!';
+    winText.style.color=scoreL>=WIN?'#00e5ff':'#ff4081';
+    winOverlay.style.display='flex';return true;
+  }
+  return false;
+}
+
+function startGame(){
+  scoreL=0;scoreR=0;scoreLE.textContent='0';scoreRE.textContent='0';
+  pL=pR=tL=tR=H/2;particles=[];trail=[];prevFrame=null;
+  overlay.style.display='none';winOverlay.style.display='none';
+  running=true;resetBall();
+  if(rafId)cancelAnimationFrame(rafId);
+  loop();
+}
+
+document.getElementById('startBtn').onclick=startGame;
+document.getElementById('restartBtn').onclick=()=>{winOverlay.style.display='none';startGame();};
+
+// ── Splash ────────────────────────────────────────────────────────
+(()=>{
+  const splash=document.getElementById('splash');
+  const logo=document.getElementById('splashLogo');
+  const name=document.getElementById('splashName');
+  const fill=document.getElementById('splashFill');
+
+  // Load the uploaded logo via the image in the page
+  // We'll use the image data URI passed from context — use a placeholder blue circle with text
+  // Since we can't embed the actual image file, we draw it on a canvas and use as src
+  const splashTitle=document.getElementById('splashName');
+  const splashFill=document.getElementById('splashFill');
+  setTimeout(()=>{ splashTitle.style.opacity='1'; },200);
+  setTimeout(()=>{ splashFill.style.width='100%'; },300);
+
+  // Animate in
+  setTimeout(()=>{ logo.style.opacity='1'; name.style.opacity='1'; },100);
+  setTimeout(()=>{ fill.style.width='100%'; },200);
+
+  // Fade out after 5s
+  setTimeout(()=>{
+    splash.style.opacity='0';
+    setTimeout(()=>{ splash.style.display='none'; },800);
+  },5000);
+})();
+navigator.mediaDevices.getUserMedia({video:{width:640,height:480,facingMode:'user'}})
+  .then(stream=>{
+    video.srcObject=stream;
+    video.onloadeddata=()=>{
+      camReady=true;
+      statusEl.textContent='📷 حرّك يديك — يسار الشاشة للمضرب الأيسر، يمين الشاشة للمضرب الأيمن';
+      camStatusEl.textContent='✅ الكاميرا جاهزة! اضغط ابدأ';
+      camStatusEl.style.color='#00ff88';
+    };
+  })
+  .catch(()=>{
+    camStatusEl.textContent='⚠️ لا كاميرا — وضع الماوس';
+    camStatusEl.style.color='#ff6644';
+    statusEl.textContent='🖱️ الماوس: يسار الشاشة = أيسر | يمين الشاشة = أيمن';
+    camReady=true;
+    const cont=document.getElementById('container');
+    cont.addEventListener('mousemove',e=>{
+      const r=cont.getBoundingClientRect();
+      const y=clamp((e.clientY-r.top)/r.height*H,0,H);
+      const x=(e.clientX-r.left)/r.width*W;
+      if(x<W/2){tL=y;handFound.L=true;}else{tR=y;handFound.R=true;}
+    });
+  });
+
+draw();
+</script>
+</body>
+</html>
